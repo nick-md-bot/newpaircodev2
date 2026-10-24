@@ -9,7 +9,8 @@ const {
     useMultiFileAuthState,
     delay,
     Browsers,
-    makeCacheableSignalKeyStore
+    makeCacheableSignalKeyStore,
+    fetchLatestBaileysVersion
 } = require("@whiskeysockets/baileys");
 
 function removeFile(FilePath) {
@@ -37,7 +38,10 @@ router.get('/', async (req, res) => {
         const { state, saveCreds } = await useMultiFileAuthState(dir);
         const logger = pino({ level: "fatal" }).child({ level: "fatal" });
         try {
+            let version;
+            try { ({ version } = await fetchLatestBaileysVersion()); } catch (e) { console.log('version fetch failed, using default'); }
             const session = makeWASocket({
+                ...(version ? { version } : {}),
                 auth: {
                     creds: state.creds,
                     keys: makeCacheableSignalKeyStore(state.keys, logger),
