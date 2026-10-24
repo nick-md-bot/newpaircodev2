@@ -1,9 +1,8 @@
-const axios = require('axios');
 const { create } = require('./session');
 const { makeid } = require('./id');
 const express = require('express');
 const fs = require('fs');
-let router = express.Router();
+const router = express.Router();
 const pino = require("pino");
 const {
     default: makeWASocket,
@@ -16,61 +15,82 @@ const {
 function removeFile(FilePath) {
     if (!fs.existsSync(FilePath)) return false;
     fs.rmSync(FilePath, { recursive: true, force: true });
-};
+}
 
 router.get('/', async (req, res) => {
     const id = makeid();
-    let num = req.query.number;
+    const dir = './temp/' + id;
+    let num = (req.query.number || '').toString().replace(/[^0-9]/g, '');
+    let finished = false;
+    let codeSent = false;
+    let attempts = 0;
+
+    if (!num) return res.status(400).send({ code: "Number required" });
+
+    const fail = (msg) => {
+        finished = true;
+        removeFile(dir);
+        if (!res.headersSent) res.send({ code: msg });
+    };
 
     async function getPaire() {
-        const { state, saveCreds } = await useMultiFileAuthState('./temp/' + id);
+        const { state, saveCreds } = await useMultiFileAuthState(dir);
+        const logger = pino({ level: "fatal" }).child({ level: "fatal" });
         try {
-            let session = makeWASocket({
+            const session = makeWASocket({
                 auth: {
                     creds: state.creds,
-                    keys: makeCacheableSignalKeyStore(state.keys, pino({level: "fatal"}).child({level: "fatal"})),
+                    keys: makeCacheableSignalKeyStore(state.keys, logger),
                 },
                 printQRInTerminal: false,
-                logger: pino({level: "fatal"}).child({level: "fatal"}),
+                logger,
                 browser: Browsers.macOS("Safari"),
-             });
-
-            if (!session.authState.creds.registered) {
-                await delay(3000);
-                num = num.replace(/[^0-9]/g, '');
-                const code = await session.requestPairingCode(num);
-                if (!res.headersSent) {
-                    await res.send({ code });
-                }
-            }
+            });
 
             session.ev.on('creds.update', saveCreds);
 
             session.ev.on("connection.update", async (s) => {
-                const { connection, lastDisconnect } = s;
+                const { connection, lastDisconnect, qr } = s;
 
-                if (connection == "open") {
-                    await delay(5000);
-                    await delay(5000);
+                // Socket is ready to talk to WhatsApp once it emits a qr -> ask pairing code now
+                if (qr && !codeSent && !session.authState.creds.registered) {
+                    codeSent = true;
+                    try {
+                        const code = await session.requestPairingCode(num);
+                        if (!res.headersSent) res.send({ code });
+                    } catch (err) {
+                        console.log("pairing code error:", err && err.message);
+                        codeSent = false;
+                        if (++attempts >= 3) fail("Service Unavailable: " + (err && err.message));
+                    }
+                }
 
-                    const jsonData = await fs.promises.readFile(`${__dirname}/temp/${id}/creds.json`, 'utf-8');     
-                    const { id: data } = await create(jsonData);
-                    await session.sendMessage(session.user.id, { text: 'bot~' + data });
-
-                    await delay(100);
-                    await session.ws.close();
-                    return await removeFile('./temp/' + id);
-                } else if (connection === "close" && lastDisconnect && lastDisconnect.error && lastDisconnect.error.output.statusCode != 401) {
-                    await delay(10000);
+                if (connection === "open") {
+                    try {
+                        await delay(5000);
+                        const jsonData = await fs.promises.readFile(`${dir}/creds.json`, 'utf-8');
+                        const { id: data } = await create(jsonData);
+                        await session.sendMessage(session.user.id, { text: 'bot~' + data });
+                        await delay(1000);
+                    } catch (err) {
+                        console.log("save session error:", err && err.message);
+                    }
+                    finished = true;
+                    try { await session.ws.close(); } catch (e) {}
+                    removeFile(dir);
+                } else if (connection === "close" && !finished) {
+                    const code = lastDisconnect && lastDisconnect.error && lastDisconnect.error.output
+                        ? lastDisconnect.error.output.statusCode : undefined;
+                    console.log("connection closed, status:", code);
+                    if (code === 401 || code === 403) return fail("WhatsApp refused connection (" + code + ")");
+                    if (++attempts > 6) return fail("Connection failed, try again");
+                    await delay(3000);
                     getPaire();
                 }
             });
         } catch (err) {
             console.log("pair error:", err && (err.stack || err.message || err));
-            await removeFile('./temp/' + id);
-            if (!res.headersSent) {
-                await res.send({ code: "Service Unavailable: " + (err && err.message) });
-            }
+            fail("Service Unavailable: " + (err && err.message));
         }
     }
 
