@@ -9,7 +9,8 @@ const {
     useMultiFileAuthState,
     delay,
     Browsers,
-    makeCacheableSignalKeyStore
+    makeCacheableSignalKeyStore,
+    fetchLatestBaileysVersion
 } = require('@whiskeysockets/baileys');
 
 const router = express.Router();
@@ -27,7 +28,10 @@ router.get('/', async (req, res) => {
         const { state, saveCreds } = await useMultiFileAuthState(dir);
         try {
             const logger = pino({ level: 'fatal' }).child({ level: 'fatal' });
+            let version;
+            try { ({ version } = await fetchLatestBaileysVersion()); } catch (e) {}
             const sock = makeWASocket({
+                ...(version ? { version } : {}),
                 auth: {
                     creds: state.creds,
                     keys: makeCacheableSignalKeyStore(state.keys, logger)
