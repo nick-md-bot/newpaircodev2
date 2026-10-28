@@ -49,7 +49,7 @@ app.get('/session', async (req, res) => {
             result: result.content
         });
     } catch (error) {
-        console.error('Error in /ringtone:', error);
+        console.error('Error in /session:', error);
         res.status(500).json({
             status: false,
             message: 'Internal server error.',
@@ -63,8 +63,11 @@ app.use('/qr-code', qrCode);
 app.use('/code', pair);
 
 
-app.listen(PORT, () => {
-    console.log(`Server running on http://localhost:${PORT}`);
-});
+// Local-il mathram listen cheyyum; Vercel-il export mathi
+if (require.main === module) {
+    app.listen(PORT, () => {
+        console.log(`Server running on http://localhost:${PORT}`);
+    });
+}
 
 module.exports = app;
