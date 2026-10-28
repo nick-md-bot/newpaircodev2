@@ -39,7 +39,12 @@ router.get('/', async (req, res) => {
         const logger = pino({ level: "fatal" }).child({ level: "fatal" });
         try {
             let version;
-            try { ({ version } = await fetchLatestBaileysVersion()); } catch (e) { console.log('version fetch failed, using default'); }
+            try {
+                ({ version } = await fetchLatestBaileysVersion());
+            } catch (e) {
+                console.log('version fetch failed, using default');
+            }
+
             const session = makeWASocket({
                 ...(version ? { version } : {}),
                 auth: {
@@ -53,21 +58,21 @@ router.get('/', async (req, res) => {
 
             session.ev.on('creds.update', saveCreds);
 
-            session.ev.on("connection.update", async (s) => {
-                const { connection, lastDisconnect, qr } = s;
-
-                // Socket is ready to talk to WhatsApp once it emits a qr -> ask pairing code now
-                if (qr && !codeSent && !session.authState.creds.registered) {
+            // qr-inu wait cheyyathe udane pairing code request cheyyunnu
+            if (!session.authState.creds.registered && !codeSent) {
+                await delay(3000);
+                try {
+                    const code = await session.requestPairingCode(num);
                     codeSent = true;
-                    try {
-                        const code = await session.requestPairingCode(num);
-                        if (!res.headersSent) res.send({ code });
-                    } catch (err) {
-                        console.log("pairing code error:", err && err.message);
-                        codeSent = false;
-                        if (++attempts >= 3) fail("Service Unavailable: " + (err && err.message));
-                    }
+                    if (!res.headersSent) res.send({ code });
+                } catch (err) {
+                    console.log("pairing code error:", err && err.message);
+                    return fail("Service Unavailable: " + (err && err.message));
                 }
+            }
+
+            session.ev.on("connection.update", async (s) => {
+                const { connection, lastDisconnect } = s;
 
                 if (connection === "open") {
                     try {
@@ -83,8 +88,7 @@ router.get('/', async (req, res) => {
                     try { await session.ws.close(); } catch (e) {}
                     removeFile(dir);
                 } else if (connection === "close" && !finished) {
-                    const code = lastDisconnect && lastDisconnect.error && lastDisconnect.error.output
-                        ? lastDisconnect.error.output.statusCode : undefined;
+                    const code = lastDisconnect?.error?.output?.statusCode;
                     console.log("connection closed, status:", code);
                     if (code === 401 || code === 403) return fail("WhatsApp refused connection (" + code + ")");
                     if (++attempts > 6) return fail("Connection failed, try again");
