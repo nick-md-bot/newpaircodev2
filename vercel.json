@@ -1,7 +1,16 @@
 {
   "version": 2,
-  "functions": {
-    "index.js": { "maxDuration": 60 }
-  },
-  "rewrites": [{ "source": "/(.*)", "destination": "/index.js" }]
+  "builds": [
+    {
+      "src": "index.js",
+      "use": "@vercel/node",
+      "config": {
+        "maxDuration": 60,
+        "includeFiles": ["public/**"]
+      }
+    }
+  ],
+  "routes": [
+    { "src": "/(.*)", "dest": "/index.js" }
+  ]
 }
